@@ -20,6 +20,7 @@ package rest
 import (
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"testing"
 
@@ -66,5 +67,48 @@ func TestClosedConnection(t *testing.T) {
 		if requestCompleted {
 			t.Fatalf("expected an attempted retry but the request completed")
 		}
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got, ok := ParseRetryAfter("7"); !ok || got != 7*time.Second {
+		t.Errorf("seconds: got %v %v", got, ok)
+	}
+	if got, ok := ParseRetryAfter("Wed, 21 Oct 2015 07:28:00 GMT"); !ok || got != 0 {
+		t.Errorf("past date: got %v %v", got, ok)
+	}
+	if got, ok := ParseRetryAfter(time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)); !ok || got <= 0 {
+		t.Errorf("future date: got %v %v", got, ok)
+	}
+	for _, value := range []string{"", "soon", "-1"} {
+		if _, ok := ParseRetryAfter(value); ok {
+			t.Errorf("expected %q to be rejected", value)
+		}
+	}
+}
+
+func TestSendRetriesThrottledRequestWithDateRetryAfter(t *testing.T) {
+	attempt := 0
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
+		if attempt == 1 {
+			w.Header().Set("Retry-After", "Wed, 21 Oct 2015 07:28:00 GMT")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer testServer.Close()
+
+	client, err := NewRestClient(testServer.URL, config.Config{Authority: testServer.URL})
+	if err != nil {
+		t.Fatalf("error initializing rest client %v", err)
+	}
+
+	req, _ := http.NewRequest("GET", testServer.URL, nil)
+	if res, err := client.(*restClient).send(req); err != nil {
+		t.Fatalf("expected throttled request to be retried, got %v", err)
+	} else if res.StatusCode != http.StatusOK || attempt != 2 {
+		t.Fatalf("got status %d after %d attempts, want 200 after 2", res.StatusCode, attempt)
 	}
 }
