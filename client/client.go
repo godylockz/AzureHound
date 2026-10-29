@@ -22,6 +22,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -37,6 +38,9 @@ import (
 
 // This prevents a hung connection from blocking the entire collection pipeline indefinitely.
 var pageRequestTimeout = 2 * time.Minute
+
+// Number of extra attempts for a page whose request ran past pageRequestTimeout.
+var pageTimeoutRetries = 2
 
 func NewClient(config config.Config) (AzureClient, error) {
 	if msgraph, err := rest.NewRestClient(config.GraphUrl(), config); err != nil {
@@ -105,57 +109,39 @@ func getAzureObjectList[T any](client rest.RestClient, ctx context.Context, path
 	defer close(out)
 
 	var (
-		errResult AzureResult[T]
-		nextLink  string
+		errResult    AzureResult[T]
+		nextLink     string
+		skipped      int
+		firstSkipErr error
 	)
 
 	for {
 		var (
 			list struct {
-				CountGraph    int    `json:"@odata.count,omitempty"`    // The total count of all graph results
-				NextLinkGraph string `json:"@odata.nextLink,omitempty"` // The URL to use for getting the next set of graph values.
-				ContextGraph  string `json:"@odata.context,omitempty"`
-				NextLinkRM    string `json:"nextLink,omitempty"` // The URL to use for getting the next set of rm values.
-				Value         []T    `json:"value"`              // A list of azure values
+				CountGraph    int               `json:"@odata.count,omitempty"`    // The total count of all graph results
+				NextLinkGraph string            `json:"@odata.nextLink,omitempty"` // The URL to use for getting the next set of graph values.
+				ContextGraph  string            `json:"@odata.context,omitempty"`
+				NextLinkRM    string            `json:"nextLink,omitempty"` // The URL to use for getting the next set of rm values.
+				Value         []json.RawMessage `json:"value"`              // A list of azure values, decoded individually below
 			}
-			res *http.Response
-			err error
+			res        *http.Response
+			pageCancel context.CancelFunc
+			err        error
 		)
 
-		// Create a per-page timeout so a single hung API response cannot block
-		// the entire collection pipeline indefinitely.
-		pageCtx, pageCancel := context.WithTimeout(ctx, pageRequestTimeout)
-
-		if nextLink != "" {
-			if nextUrl, err := url.Parse(nextLink); err != nil {
-				pageCancel()
-				errResult.Error = err
-				_ = pipeline.Send(ctx.Done(), out, errResult)
-				return
-			} else {
-				paramsMap := make(map[string]string)
-				if params != nil {
-					paramsMap = params.AsMap()
-				}
-				if req, err := rest.NewRequest(pageCtx, "GET", nextUrl, nil, paramsMap, nil); err != nil {
-					pageCancel()
-					errResult.Error = err
-					_ = pipeline.Send(ctx.Done(), out, errResult)
-					return
-				} else if res, err = client.Send(req); err != nil {
-					pageCancel()
-					errResult.Error = err
-					_ = pipeline.Send(ctx.Done(), out, errResult)
-					return
-				}
+		// A page that hits its timeout is retried with a fresh timeout while the parent context is still live,
+		// so one slow response does not end the listing for the whole scope.
+		for attempt := 0; ; attempt++ {
+			if res, pageCancel, err = getAzureObjectListPage(client, ctx, path, params, nextLink); err == nil {
+				break
 			}
-		} else {
-			if res, err = client.Get(pageCtx, path, params, nil); err != nil {
-				pageCancel()
-				errResult.Error = err
-				_ = pipeline.Send(ctx.Done(), out, errResult)
-				return
+			pageCancel()
+			if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && attempt < pageTimeoutRetries {
+				continue
 			}
+			errResult.Error = err
+			_ = pipeline.Send(ctx.Done(), out, errResult)
+			return
 		}
 
 		if err := rest.Decode(res.Body, &list); err != nil {
@@ -168,7 +154,18 @@ func getAzureObjectList[T any](client rest.RestClient, ctx context.Context, path
 		// Page fetch complete; release the timeout context
 		pageCancel()
 
-		for _, u := range list.Value {
+		// Decode items one at a time: an object that does not fit the model is skipped instead of failing the
+		// page, and therefore every page after it. Callers that stop on the first error still receive every
+		// other item because the error is only sent once the listing is complete.
+		for _, raw := range list.Value {
+			var u T
+			if err := json.Unmarshal(raw, &u); err != nil {
+				if skipped == 0 {
+					firstSkipErr = err
+				}
+				skipped++
+				continue
+			}
 			if ok := pipeline.Send(ctx.Done(), out, AzureResult[T]{Ok: u}); !ok {
 				return
 			}
@@ -180,6 +177,37 @@ func getAzureObjectList[T any](client rest.RestClient, ctx context.Context, path
 			nextLink = list.NextLinkGraph
 		} else if list.NextLinkRM != "" {
 			nextLink = list.NextLinkRM
+		}
+	}
+
+	if skipped > 0 {
+		errResult.Error = fmt.Errorf("skipped %d item(s) from %s that could not be decoded: %w", skipped, path, firstSkipErr)
+		_ = pipeline.Send(ctx.Done(), out, errResult)
+	}
+}
+
+// getAzureObjectListPage requests the first page at path, or the page at nextLink when set. The returned cancel
+// func must be called once the response body has been read.
+func getAzureObjectListPage(client rest.RestClient, ctx context.Context, path string, params query.Params, nextLink string) (*http.Response, context.CancelFunc, error) {
+	// Create a per-page timeout so a single hung API response cannot block
+	// the entire collection pipeline indefinitely.
+	pageCtx, pageCancel := context.WithTimeout(ctx, pageRequestTimeout)
+
+	if nextLink == "" {
+		res, err := client.Get(pageCtx, path, params, nil)
+		return res, pageCancel, err
+	} else if nextUrl, err := url.Parse(nextLink); err != nil {
+		return nil, pageCancel, err
+	} else {
+		paramsMap := make(map[string]string)
+		if params != nil {
+			paramsMap = params.AsMap()
+		}
+		if req, err := rest.NewRequest(pageCtx, "GET", nextUrl, nil, paramsMap, nil); err != nil {
+			return nil, pageCancel, err
+		} else {
+			res, err := client.Send(req)
+			return res, pageCancel, err
 		}
 	}
 }
