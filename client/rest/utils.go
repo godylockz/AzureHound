@@ -141,6 +141,23 @@ func IsGoAwayErr(err error) bool {
 	return errors.As(err, &goAwayErr)
 }
 
+// ParseRetryAfter reads a Retry-After header given either as delay-seconds or as an HTTP date.
+func ParseRetryAfter(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil && seconds >= 0 {
+		return time.Duration(seconds) * time.Second, true
+	} else if date, err := http.ParseTime(value); err == nil {
+		return max(time.Until(date), 0), true
+	}
+	return 0, false
+}
+
+// discardBody drains and closes a response that will not be returned so its connection can be reused.
+func discardBody(res *http.Response) {
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+}
+
 func ExponentialBackoff(retry int) {
 	backoff := math.Pow(5, float64(retry+1))
 	time.Sleep(time.Second * time.Duration(backoff))

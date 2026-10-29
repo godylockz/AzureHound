@@ -26,7 +26,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/SpecterOps/AzureHound/v2/client/config"
@@ -180,6 +179,7 @@ func (s *restClient) send(req *http.Request) (*http.Response, error) {
 		var (
 			res        *http.Response
 			err        error
+			lastStatus int
 			maxRetries = 3
 		)
 		// Try the request up to a set number of times
@@ -203,15 +203,19 @@ func (s *restClient) send(req *http.Request) (*http.Response, error) {
 				// Error response code handling
 				// See official Retry guidance (https://learn.microsoft.com/en-us/azure/architecture/best-practices/retry-service-specific#retry-usage-guidance)
 				if res.StatusCode == http.StatusTooManyRequests {
-					retryAfterHeader := res.Header.Get("Retry-After")
-					if retryAfter, err := strconv.ParseInt(retryAfterHeader, 10, 64); err != nil {
-						return nil, fmt.Errorf("attempting to handle 429 but unable to parse retry-after header: %w", err)
-					} else {
+					lastStatus = res.StatusCode
+					discardBody(res)
+					if retryAfter, ok := ParseRetryAfter(res.Header.Get("Retry-After")); ok {
 						// Wait the time indicated in the retry-after header
-						time.Sleep(time.Second * time.Duration(retryAfter))
-						continue
+						time.Sleep(retryAfter)
+					} else {
+						// Throttled without a usable retry-after header; back off instead of giving up
+						ExponentialBackoff(retry)
 					}
+					continue
 				} else if res.StatusCode >= http.StatusInternalServerError {
+					lastStatus = res.StatusCode
+					discardBody(res)
 					// Wait the time calculated by the 5 second exponential backoff
 					ExponentialBackoff(retry)
 					continue
@@ -228,6 +232,9 @@ func (s *restClient) send(req *http.Request) (*http.Response, error) {
 				// Response OK
 				return res, nil
 			}
+		}
+		if err == nil {
+			err = fmt.Errorf("last response status %d", lastStatus)
 		}
 		return nil, fmt.Errorf("unable to complete the request after %d attempts: %w", maxRetries, err)
 	}
