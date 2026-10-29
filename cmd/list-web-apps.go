@@ -29,6 +29,7 @@ import (
 	"github.com/SpecterOps/AzureHound/v2/config"
 	"github.com/SpecterOps/AzureHound/v2/enums"
 	"github.com/SpecterOps/AzureHound/v2/models"
+	"github.com/SpecterOps/AzureHound/v2/models/azure"
 	"github.com/SpecterOps/AzureHound/v2/panicrecovery"
 	"github.com/SpecterOps/AzureHound/v2/pipeline"
 	"github.com/spf13/cobra"
@@ -107,7 +108,8 @@ func listWebApps(ctx context.Context, client client.AzureClient, subscriptions <
 							ResourceGroupName: item.Ok.ResourceGroupName(),
 							TenantId:          client.TenantInfo().TenantId,
 						}
-						if webApp.Kind == "app" {
+						// Every site that is not a function app is a web app (app,linux, hyperV, app,container,windows, ...)
+						if !azure.IsFunctionAppKind(webApp.Kind) {
 							log.V(2).Info("found web app", "name", webApp.Name)
 							count++
 							if ok := pipeline.SendAny(ctx.Done(), out, AzureWrapper{

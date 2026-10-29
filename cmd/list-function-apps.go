@@ -29,6 +29,7 @@ import (
 	"github.com/SpecterOps/AzureHound/v2/config"
 	"github.com/SpecterOps/AzureHound/v2/enums"
 	"github.com/SpecterOps/AzureHound/v2/models"
+	"github.com/SpecterOps/AzureHound/v2/models/azure"
 	"github.com/SpecterOps/AzureHound/v2/panicrecovery"
 	"github.com/SpecterOps/AzureHound/v2/pipeline"
 	"github.com/spf13/cobra"
@@ -102,7 +103,7 @@ func listFunctionApps(ctx context.Context, client client.AzureClient, subscripti
 							ResourceGroupName: item.Ok.ResourceGroupName(),
 							TenantId:          client.TenantInfo().TenantId,
 						}
-						if functionApp.Kind == "functionapp" {
+						if azure.IsFunctionAppKind(functionApp.Kind) {
 							log.V(2).Info("found function app", "name", functionApp.Name)
 							count++
 							if ok := pipeline.SendAny(ctx.Done(), out, AzureWrapper{
