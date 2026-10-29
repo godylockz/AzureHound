@@ -49,3 +49,15 @@ func (s FunctionApp) ResourceGroupId() string {
 		return ""
 	}
 }
+
+// IsFunctionAppKind reports whether an App Service site kind describes a function app. Kind is a
+// comma-separated list such as "functionapp,linux" or "functionapp,workflowapp" (Logic Apps Standard).
+// https://github.com/Azure/app-service-linux-docs/blob/master/Things_You_Should_Know/kind_property.md
+func IsFunctionAppKind(kind string) bool {
+	for _, value := range strings.Split(kind, ",") {
+		if strings.EqualFold(strings.TrimSpace(value), "functionapp") {
+			return true
+		}
+	}
+	return false
+}
