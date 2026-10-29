@@ -11,6 +11,7 @@ SpecterOps/AzureHound with pushes disabled.
 | Back off on 429 responses without an integer `Retry-After` | https://github.com/SpecterOps/AzureHound/issues/65 (related) | Upstream handles date and missing `Retry-After` |
 | Accept the legacy ARM token audience | https://github.com/SpecterOps/AzureHound/pull/203 (cherry-picked) | PR 203 is merged |
 | Keep administrative unit and object scopes on Entra role assignments | https://github.com/SpecterOps/AzureHound/issues/80, https://github.com/SpecterOps/BloodHound/issues/942 | Upstream stops rewriting non-app scopes to `/` |
+| Bump `golang.org/x/net` to v0.60.0 for GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612 and GO-2026-6617, which `govulncheck` reports as called | none | Upstream requires `golang.org/x/net` v0.60.0 or later |
 
 The role assignment scope patch pairs with the scoped role assignment patch in the BloodHound fork; without that, BloodHound
 still treats scoped assignments as tenant-wide.
