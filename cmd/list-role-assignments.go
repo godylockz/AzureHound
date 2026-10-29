@@ -108,8 +108,9 @@ func listRoleAssignments(ctx context.Context, client client.AzureClient, roles <
 					} else {
 						log.V(2).Info("found role assignment", "id", item.Ok.Id)
 						count++
-						// To ensure proper linking to AZApp nodes we want to supply the AppId instead when role assignments are app specific scoped
-						if item.Ok.DirectoryScopeId != "/" {
+						// To ensure proper linking to AZApp nodes we want to supply the AppId instead when role assignments are app specific scoped.
+						// Other scopes (administrative units, single objects) have no AppId and keep their scope, since "/" would mean tenant-wide.
+						if item.Ok.DirectoryScopeId != "/" && item.Ok.DirectoryScope.AppId != "" {
 							item.Ok.DirectoryScopeId = fmt.Sprintf("/%s", item.Ok.DirectoryScope.AppId)
 						}
 						roleAssignments.RoleAssignments = append(roleAssignments.RoleAssignments, item.Ok)
