@@ -82,7 +82,8 @@ type Trigger struct {
 
 type Recurrence struct {
 	Frequency string `json:"frequency,omitempty"`
-	Interval  int    `json:"interval,omitempty"`
+	// Interval is a number, or a string when it comes from a workflow parameter or expression
+	Interval interface{} `json:"interval,omitempty"`
 }
 
 type Condition struct {
