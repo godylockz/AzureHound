@@ -43,6 +43,9 @@ var listGroupsCmd = &cobra.Command{
 	SilenceUsage: true,
 }
 
+// This prevents one group enrichment request from blocking group collection indefinitely.
+var groupSyncBehaviorRequestTimeout = 30 * time.Second
+
 func listGroupsCmdImpl(cmd *cobra.Command, _ []string) {
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, os.Kill)
 	defer gracefulShutdown(stop)
@@ -82,7 +85,10 @@ func listGroups(ctx context.Context, client client.AzureClient) <-chan interface
 				// The flag lives on the onPremisesSyncBehavior navigation property, which is not returned on the group
 				// resource and does not support $expand, hence the per-group GET.
 				if group.OnPremisesSecurityIdentifier != "" {
-					if syncBehavior, err := client.GetAzureADGroupOnPremisesSyncBehavior(ctx, group.Id); err != nil {
+					syncBehaviorCtx, cancel := context.WithTimeout(ctx, groupSyncBehaviorRequestTimeout)
+					syncBehavior, err := client.GetAzureADGroupOnPremisesSyncBehavior(syncBehaviorCtx, group.Id)
+					cancel()
+					if err != nil {
 						log.V(2).Info("unable to resolve onPremisesSyncBehavior for group", "groupId", group.Id, "error", err)
 					} else if syncBehavior != nil {
 						group.IsCloudManaged = syncBehavior.IsCloudManaged

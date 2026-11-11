@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/SpecterOps/AzureHound/v2/client"
 	"github.com/SpecterOps/AzureHound/v2/client/mocks"
@@ -191,5 +192,54 @@ func TestListGroupsCloudManagedErrorTolerated(t *testing.T) {
 	}
 	if group.IsCloudManaged != nil {
 		t.Errorf("expected IsCloudManaged=nil when resolution errors, got %v", *group.IsCloudManaged)
+	}
+}
+
+func TestListGroupsCloudManagedLookupTimesOut(t *testing.T) {
+	originalTimeout := groupSyncBehaviorRequestTimeout
+	groupSyncBehaviorRequestTimeout = 25 * time.Millisecond
+	defer func() { groupSyncBehaviorRequestTimeout = originalTimeout }()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := mocks.NewMockAzureClient(ctrl)
+	mockChannel := make(chan client.AzureResult[azure.Group])
+	mockTenant := azure.Tenant{}
+
+	mockClient.EXPECT().TenantInfo().Return(mockTenant).AnyTimes()
+	mockClient.EXPECT().ListAzureADGroups(gomock.Any(), gomock.Any()).Return(mockChannel)
+	mockClient.EXPECT().
+		GetAzureADGroupOnPremisesSyncBehavior(gomock.Any(), "group-with-sid").
+		DoAndReturn(func(ctx context.Context, _ string) (*azure.OnPremisesSyncBehavior, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+
+	go func() {
+		defer close(mockChannel)
+		mockChannel <- client.AzureResult[azure.Group]{
+			Ok: azure.Group{
+				DirectoryObject:              azure.DirectoryObject{Id: "group-with-sid"},
+				OnPremisesSecurityIdentifier: "S-1-5-21-111-222-333-1369",
+			},
+		}
+	}()
+
+	select {
+	case result := <-listGroups(context.Background(), mockClient):
+		wrapper, ok := result.(AzureWrapper)
+		if !ok {
+			t.Fatalf("failed type assertion: got %T, want AzureWrapper", result)
+		}
+		group, ok := wrapper.Data.(models.Group)
+		if !ok {
+			t.Fatalf("failed type assertion on Data: got %T, want models.Group", wrapper.Data)
+		}
+		if group.IsCloudManaged != nil {
+			t.Errorf("expected IsCloudManaged=nil after lookup timeout, got %v", *group.IsCloudManaged)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("group collection remained blocked after the enrichment timeout")
 	}
 }
