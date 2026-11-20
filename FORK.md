@@ -6,6 +6,8 @@ SpecterOps/AzureHound with pushes disabled.
 | Patch | Upstream reference | Drop when |
 |---|---|---|
 | Classify App Service sites by kind value, so Linux, container and Logic Apps Standard sites are collected | https://github.com/SpecterOps/AzureHound/issues/72, https://github.com/SpecterOps/AzureHound/pull/90 | Upstream matches kind values instead of whole strings |
+| Collect Microsoft Entra Domain Services resources and their role assignments | https://github.com/SpecterOps/AzureHound/pull/206 | PR 206 is merged with equivalent output |
+| Collect group `isCloudManaged` from `onPremisesSyncBehavior`, with per-group lookups limited to groups that have an on-premises SID | https://github.com/SpecterOps/AzureHound/pull/216 | Upstream collects the flag without an unbounded lookup for every group |
 | Decode list items individually and retry pages that hit the page timeout | none | Upstream stops failing a listing on one undecodable item |
 | Accept string recurrence intervals on Logic App triggers | https://github.com/SpecterOps/AzureHound/issues/19 (closed without a fix) | Upstream accepts string intervals |
 | Back off on 429 responses without an integer `Retry-After` | https://github.com/SpecterOps/AzureHound/issues/65 (related) | Upstream handles date and missing `Retry-After` |
